@@ -1,0 +1,187 @@
+@"
+@@@@@@   @@@@@@   @@@@@@@   @@@@@@   @     @
+@        @    @   @         @        @@   @@
+@  @@@   @@@@@@   @@@@@@    @@@@@@   @ @ @ @
+@    @   @    @        @    @        @  @  @
+@@@@@@   @    @   @@@@@@    @@@@@@   @     @
+"@ | ForEach-Object { Write-Host $_ -ForegroundColor Green }
+
+<#
+  .SYNOPSIS
+    Installs Google Chrome, Mozilla Firefox, Adobe Acrobat Reader, ManageEngine Asset Explorer Agent, Citrix Workspace, and plays a song via VLC.
+  .DESCRIPTION
+    Installs Chrome, Firefox, Asset Explorer Agent, Citrix from local paths, and Adobe Acrobat from an online URL. After installation, it plays a song using VLC.
+#>
+
+# Local installer paths (dynamically using current username)
+$basePath = "C:\Users\$env:USERNAME\Desktop\AUTO"
+
+$ChromeInstaller    = "$basePath\GoogleChromeStandaloneEnterprise64.msi"
+$FirefoxInstaller   = "$basePath\Firefox Setup 137.0.2.exe"
+$CitrixInstaller    = "$basePath\CitrixWorkspaceApp.exe"
+$ManageEngineInstaller = "$basePath\ManageEngineAssetExplorerAgent.msi"
+
+# Adobe Acrobat (online download URL)
+$AdobeURL           = 'https://trials.adobe.com/AdobeProducts/APRO/Acrobat_HelpX/win32/Acrobat_DC_Web_WWMUI.zip'
+$AdobeArchive       = "$env:temp\AdobeAcrobat.zip"
+$AdobeInstaller     = "$env:temp\Adobe Acrobat\Setup.exe"
+
+# Desktop Central Agent Installer paths
+$scriptDir = "$basePath\localsetup"
+$msiPath        = Join-Path $scriptDir "DesktopCentralAgent.msi"
+$mstPath        = Join-Path $scriptDir "DesktopCentralAgent.mst"
+$serverRootCrt  = Join-Path $scriptDir "DMRootCA-Server.crt"
+$dsRootCrt      = Join-Path $scriptDir "DMRootCA.crt"
+$logPath        = Join-Path $scriptDir "Agentinstalllog.txt"
+
+# Path to your audio file (for VLC)
+$songPath = "$basePath\SnoopDog.mp3"
+
+# Path to VLC (adjust if installed elsewhere)
+$vlcPath = "C:\Program Files\VideoLAN\VLC\vlc.exe"
+
+function Get-InstallStatus {
+  param(
+    [Parameter(Mandatory = $true)]
+    [String]$Name
+  )
+
+  $RegPaths = (
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+  )
+
+  Start-Sleep -Seconds 5
+
+  $Program = Get-ChildItem -Path $RegPaths | Get-ItemProperty | Where-Object { $_.DisplayName -match $Name } | Select-Object
+  if ($Program) { Write-Output "`nInstalled $Name [$($Program.DisplayVersion)]" }
+}
+
+function Install-GoogleChrome {
+  try {
+    if (-Not (Test-Path $ChromeInstaller)) {
+      return
+    }
+
+    Write-Output "`nInstalling Google Chrome from local path..."
+    $args = @('/i', "`"$ChromeInstaller`"", '/quiet')
+    Start-Process -Wait -FilePath msiexec.exe -ArgumentList $args
+    Get-InstallStatus 'Google Chrome'
+  }
+  catch {}
+}
+
+function Install-Firefox {
+  try {
+    if (-Not (Test-Path $FirefoxInstaller)) {
+      return
+    }
+
+    Write-Output "`nInstalling Mozilla Firefox from local path..."
+    Start-Process -Wait -FilePath $FirefoxInstaller -ArgumentList '/S'
+    Get-InstallStatus 'Mozilla Firefox'
+  }
+  catch {}
+}
+
+function Install-AdobeReader {
+  try {
+    Write-Output "`nDownloading Adobe Acrobat..."
+    Invoke-WebRequest -Uri $AdobeURL -OutFile $AdobeArchive
+
+    Write-Output 'Extracting Adobe Acrobat installation files...'
+    Expand-Archive -Path $AdobeArchive -DestinationPath $env:temp -Force
+
+    Write-Output 'Installing Adobe Acrobat...'
+    Start-Process -Wait -FilePath $AdobeInstaller -ArgumentList '/sAll /rs /msi EULA_ACCEPT=YES'
+    Get-InstallStatus 'Adobe Acrobat'
+  }
+  catch {}
+  finally {
+    Remove-Item $AdobeArchive, "$env:temp\Adobe Acrobat\" -Recurse -Force -ErrorAction Ignore
+  }
+}
+
+function Install-ManageEngine {
+  try {
+    if (-Not (Test-Path $ManageEngineInstaller)) {
+      return
+    }
+
+    Write-Output "`nInstalling ManageEngine Asset Explorer Agent from local path..."
+    $args = @('/i', "`"$ManageEngineInstaller`"", '/quiet', '/norestart')
+    Start-Process -Wait -FilePath msiexec.exe -ArgumentList $args
+    Get-InstallStatus 'ManageEngine Asset Explorer Agent'
+  }
+  catch {}
+}
+
+function Install-DesktopCentralAgent {
+  try {
+    Write-Output "`nInstalling Desktop Central Agent..."
+    $arguments = @(
+        "/i", "`"$msiPath`"",
+        "TRANSFORMS=`"$mstPath`"",
+        "ENABLESILENT=yes",
+        "REBOOT=ReallySuppress",
+        "INSTALLSOURCE=Manual",
+        "SERVER_ROOT_CRT=`"$serverRootCrt`"",
+        "DS_ROOT_CRT=`"$dsRootCrt`"",
+        "/qn",
+        "/norestart",
+        "/lv", "`"$logPath`"" 
+    ) -join " "
+
+    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $arguments -Wait -PassThru
+    $exitCode = $process.ExitCode
+
+    switch ($exitCode) {
+        0       { Write-Host "✅ Install successful" }
+        3010    { Write-Host "⚠️ Install successful, reboot recommended" }
+        default { Write-Host "❌ Failed with code $exitCode" }
+    }
+    Get-InstallStatus 'Desktop Central Agent'
+  }
+  catch {}
+}
+
+function Install-Citrix {
+  try {
+    if (-Not (Test-Path $CitrixInstaller)) {
+      return
+    }
+
+    Write-Output "`nInstalling Citrix Workspace from local path..."
+    Start-Process -FilePath $CitrixInstaller -ArgumentList '/silent', '/includeSSON', '/components Receiver', '/acceptlicense', '/noreboot'
+    Write-Output "Waiting 3 minutes for Citrix to finish installing..."
+    Start-Sleep -Seconds 180
+    Write-Output "`n✅ Citrix installation done successfully."
+  }
+  catch {}
+}
+
+# PowerShell settings
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+if ([Net.ServicePointManager]::SecurityProtocol -notcontains 'Tls12' -and [Net.ServicePointManager]::SecurityProtocol -notcontains 'Tls13') {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+
+# Run installers
+Install-GoogleChrome
+Install-Firefox
+Install-AdobeReader
+Install-ManageEngine
+Install-DesktopCentralAgent
+Install-Citrix
+
+# Play song via VLC after Citrix installation
+Write-Output "`n🎵 Playing song via VLC..."
+Start-Process -FilePath $vlcPath -ArgumentList "--play-and-exit `"$songPath`""
+
+# Wait 60 seconds so the song can play before the script ends
+Start-Sleep -Seconds 60
+
+# Keep the PowerShell window open
+Write-Host "`nAll installations complete and song is playing. Press any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
